@@ -40,7 +40,7 @@ String sensor_names[] = {"temp1", "temp2", "temp3", "temp4",
 
 void setup() {
   // put your setup code here, to run once:
-  Serial.begin(9600);
+  Serial.begin(115200);
   Wire.begin();
   Serial.print("Time: ");
   for (int i = 0; i < NUM_SENSORS; i++) {
