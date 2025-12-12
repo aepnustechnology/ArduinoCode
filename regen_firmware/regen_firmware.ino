@@ -17,28 +17,28 @@
 //#define PUMP_ADDRESS 103 //default pump
 #define PUMP_ADDRESS 0x67 //found using scanner-- nondefault 
 
-Ezo_board pump = Ezo_board(PUMP_ADDRESS, "PUMP");   
-
-//encoder stuff
-unsigned long encoderLastTime=1,encoderThisTime;
-float freq,RPM;
-
-void handlePulse() {
-  encoderThisTime = millis();
-  freq = 60e-3 / (encoderLastTime - encoderThisTime); //ticks per ms --> ticks per minute
-  RPM = (freq / ENC_TICKS_PER_REV); //tpm -> RPM 
-  encoderLastTime = encoderThisTime;
-}
-
 //level control stuff
 short state = 0b01; //init such that we'll pump upon reset 
 bool done, timeout;
-unsigned long timeStamp, pumpTime_millis;
-signed long elapsed = 1;
+unsigned long lowLevelTimestamp, pumpTimeout_millis = 5 * 60 * 1000; //timeout after 5 minutes 
+signed long pumpTimeElapsed = 1;
+Ezo_board pump = Ezo_board(PUMP_ADDRESS, "PUMP");  
 
+//motor control stuff
 int potValue,pwmValue;
 
+//global timestamp stuff
+unsigned long timeNow;
 int rolloverCount;
+
+//encoder stuff
+unsigned long encoderTickCount, thisTickCount,lastTickCount;
+unsigned long lastTickTime;
+float ticksPerMinute,RPM;
+
+void handlePulse() {
+  encoderTickCount ++;
+}
 
 void setup() {
   Wire.begin();
@@ -46,8 +46,8 @@ void setup() {
   pinMode(PWM_OUT_PIN,OUTPUT);
   pump.send_cmd("X"); //stop
 
-  pinMode(ENCODER_PIN, INPUT_PULLUP);
-  attachInterrupt(ENCODER_PIN, handlePulse, RISING);
+  pinMode(ENCODER_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), handlePulse, RISING);
 
   #ifdef SERIAL_DEBUG_PRINTS
     Serial.begin(9600);
@@ -55,49 +55,58 @@ void setup() {
 }
 
 
+
 void loop() {
   delay(50); //millisec
+  timeNow = millis();
 
   //5V hydrogen pump (on half-bridge)
-  //read potentiometer1 and scale its value out to the PWM pin
+  //read potentiometer1 and scale its value out to the PWM pin. add a deadzone since lower commands stall it 
   potValue = analogRead(PWM_POT_PIN);
-  pwmValue = potValue > 75 ? map(potValue,0,1023,0,255) : 0; //add deadzone since pump wants to stall
+  pwmValue = potValue > 75 ? map(potValue,0,1023,0,255) : 0; 
   analogWrite(PWM_OUT_PIN,pwmValue);
 
-  #ifdef SERIAL_DEBUG_PRINTS
-    Serial.println("pot/out:");  
-    Serial.println(potValue);  
-    Serial.println(pwmValue);
-    Serial.println("12V pump RPM:");  
-    Serial.println(RPM);
-  #endif
-
-  //12V hydrogen pump:
-  //we don't do anything. 0-5v analog done by pot; encoder feedback done in ISR
+  //12V hydrogen pump: check the encoder ticks and derive the RPM
+  thisTickCount = encoderTickCount - lastTickCount;
+  float ticksPerMinute = 60e3 * (thisTickCount) / (timeNow - lastTickTime); //ticks per ms -> ticks per minute
+  RPM = (ticksPerMinute / ENC_TICKS_PER_REV); //tpm -> RPM 
+  lastTickCount = encoderTickCount;
+  lastTickTime = timeNow;
 
   //from here onward, run at 500ms-ish for liquid level controller
   rolloverCount = (++rolloverCount % 10);   
   if(rolloverCount) return;
 
-  elapsed = millis() - timeStamp;
+  pumpTimeElapsed = timeNow - lowLevelTimestamp;
 
   //timeout: too much time OR millis() rollover 
-  timeout = ((elapsed < 0) || (elapsed > pumpTime_millis));
+  timeout = ((pumpTimeElapsed < 0) || (pumpTimeElapsed > pumpTimeout_millis));
 
   //grab the new state and shift back the old one
   state = (state << 1) & 0b11;
   state = state ^ digitalRead(LEVEL_SENSOR_PIN);
 
   #ifdef SERIAL_DEBUG_PRINTS
+    Serial.println("sensorState:");
     Serial.println(state);
-    Serial.println("elapsed:");
-    Serial.println(elapsed);
+    Serial.println("pumpTimeElapsed:");
+    Serial.println(pumpTimeElapsed);
+    Serial.println();
+
+    Serial.println("5V: pot/out:");  
+    Serial.println(potValue);  
+    Serial.println(pwmValue);
+    Serial.println();
+
+    Serial.println("12V: pump RPM/ticks:");  
+    Serial.println(thisTickCount);    
+    Serial.println(RPM);  
+    Serial.println();
   #endif
 
   //water level low. Start pumping and set a timeout 
   if (state == 0b10) {
-    timeStamp = millis();
-    pumpTime_millis = 5 * 60 * 1000; //timeout after 5 minutes 
+    lowLevelTimestamp = timeNow;
     pump.send_cmd_with_num ("D,",50);//pump (Dispense) at 50ml/min
     //Serial.println("Starting pump timer...");
     done = timeout = false;
