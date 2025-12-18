@@ -63,7 +63,7 @@ void loop() {
   //5V hydrogen pump (on half-bridge)
   //read potentiometer1 and scale its value out to the PWM pin. add a deadzone since lower commands stall it 
   potValue = analogRead(PWM_POT_PIN);
-  pwmValue = potValue > 75 ? map(potValue,0,1023,0,255) : 0; 
+  pwmValue = potValue > 240 ? map(potValue,0,1023,0,255) : 0; 
   analogWrite(PWM_OUT_PIN,pwmValue);
 
   //12V hydrogen pump: check the encoder ticks and derive the RPM
